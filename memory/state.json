@@ -1,5 +1,5 @@
 {
-  "offset": 517942975,
+  "offset": 517942976,
   "conversations": {
     "3181434": [
       {
@@ -33,6 +33,14 @@
       {
         "role": "assistant",
         "content": "Could you please provide me with details about the new skill you want to add? This includes a title and description for the issue."
+      },
+      {
+        "role": "user",
+        "content": "Create an issue 'Fix login bug' and assign to copilot"
+      },
+      {
+        "role": "assistant",
+        "content": "⚠️ Something went wrong: GitHub API error: 422 {\"message\":\"Validation Failed\",\"errors\":[{\"value\":[\"copilot\"],\"resource\":\"Issue\",\"field\":\"assignees\",\"code\":\"invalid\"}],\"documentation_url\":\"https://docs.github.com/rest/issues/issues#create-an-issue\",\"status\":\"422\"}"
       }
     ]
   }
