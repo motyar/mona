@@ -48,6 +48,75 @@ You can message the bot in natural language. Here are some examples:
 - **Public repos**: GitHub Actions minutes are **free**, so the bot costs nothing to run (aside from OpenAI API usage which is minimal with GPT-4o-mini).
 - **Private repos**: GitHub Actions minutes are metered. The cron runs every minute, but most runs exit immediately (~2 seconds) when there are no new messages. Expect roughly **~40 minutes/day** of billable time in the worst case.
 
+## Adding New Skills
+
+The bot uses a **skill registry pattern** — all intents are defined as self-contained objects in a single `SKILLS` array inside the workflow's inline script. Adding a new skill requires only adding a new object to this array. The router picks it up automatically and the GPT system prompt updates automatically.
+
+### Steps
+
+1. Open `.github/workflows/bot.yml` and find the `SKILLS` array
+2. Add a new skill object following this shape:
+
+```js
+{
+  intent: 'my_new_skill',
+  description: 'A clear description of what this skill does (GPT reads this).',
+  dataFields: {
+    some_field: 'string - what GPT should extract'
+  },
+  execute: async (data, context) => {
+    // Use context.github(method, path, body) for GitHub API calls
+    // Use context.telegram(chatId, text) to send messages
+    // Use context.env.REPO for the repository name
+    const result = await context.github('GET', `/repos/${context.env.REPO}/some-endpoint`);
+    return `Done! Result: ${result.id}`;
+  }
+}
+```
+
+3. That's it — no other changes needed
+
+### Skill object fields
+
+| Field | Type | Description |
+|---|---|---|
+| `intent` | `string` | Unique intent name. GPT will use this to classify messages. |
+| `description` | `string` | Human-readable description. Included in the GPT system prompt. |
+| `dataFields` | `object \| null` | Documents what fields GPT should extract into `data`. Set to `null` if none are needed. |
+| `execute` | `async (data, context) => string \| null` | The skill logic. Return a string to reply, or `null` if you send the message yourself via `context.telegram`. |
+
+### Context object
+
+The `context` passed to every skill contains:
+
+| Key | Description |
+|---|---|
+| `chatId` | Telegram chat ID of the current conversation |
+| `github` | `async function(method, path, body?)` — makes authenticated GitHub API calls |
+| `telegram` | `async function(chatId, text)` — sends a Telegram message |
+| `env.REPO` | Repository in `owner/repo` format |
+| `env.GITHUB_TOKEN` | GitHub token |
+| `env.TELEGRAM_TOKEN` | Telegram bot token |
+| `env.OPENAI_KEY` | OpenAI API key |
+
+### Example: Add a "close issue" skill
+
+```js
+{
+  intent: 'close_issue',
+  description: 'Close an existing GitHub issue.',
+  dataFields: {
+    issue_number: 'number - the issue number to close'
+  },
+  execute: async (data, context) => {
+    await context.github('PATCH', `/repos/${context.env.REPO}/issues/${data.issue_number}`, {
+      state: 'closed'
+    });
+    return `✅ Closed issue #${data.issue_number}`;
+  }
+}
+```
+
 ## Limitations
 
 - **Cron delay**: GitHub Actions cron jobs can have up to ~1 minute of delay, so responses are not instant.

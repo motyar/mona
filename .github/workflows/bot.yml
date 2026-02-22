@@ -31,6 +31,7 @@ jobs:
           node --input-type=module << 'EOF'
           import { readFile, writeFile } from 'fs/promises';
 
+          // --- Constants ---
           const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
           const OPENAI_KEY = process.env.OPENAI_API_KEY;
           const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
@@ -38,13 +39,201 @@ jobs:
           const STATE_FILE = 'memory/state.json';
           const MAX_HISTORY = 20;
 
-          const ghHeaders = {
-            'Authorization': `Bearer ${GITHUB_TOKEN}`,
-            'Accept': 'application/vnd.github+json',
-            'X-GitHub-Api-Version': '2022-11-28',
-            'Content-Type': 'application/json'
-          };
+          // --- Helper: githubCall ---
+          async function githubCall(method, path, body = null) {
+            const res = await fetch(`https://api.github.com${path}`, {
+              method,
+              headers: {
+                'Authorization': `Bearer ${GITHUB_TOKEN}`,
+                'Accept': 'application/vnd.github+json',
+                'X-GitHub-Api-Version': '2022-11-28',
+                'Content-Type': 'application/json'
+              },
+              body: body ? JSON.stringify(body) : undefined
+            });
+            const json = await res.json();
+            if (!res.ok) throw new Error(`GitHub API error: ${res.status} ${JSON.stringify(json)}`);
+            return json;
+          }
 
+          // --- Helper: telegramSend ---
+          async function telegramSend(chatId, text) {
+            const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`;
+            await fetch(url, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'Markdown' })
+            });
+          }
+
+          // --- Skill Registry ---
+          const SKILLS = [
+            {
+              intent: 'chat',
+              description: 'General conversation. Use when no GitHub action is needed.',
+              dataFields: null,
+              execute: async (data, context) => {
+                return data.reply;
+              }
+            },
+            {
+              intent: 'create_issue',
+              description: 'Create a new GitHub issue in the repository.',
+              dataFields: {
+                title: 'string - the issue title',
+                body: 'string - the issue body or description',
+                assign_copilot: 'boolean - true if user wants copilot to handle it'
+              },
+              execute: async (data, context) => {
+                const issue = await context.github('POST', `/repos/${context.env.REPO}/issues`, {
+                  title: data.title,
+                  body: data.body || '',
+                  assignees: data.assign_copilot ? ['copilot'] : []
+                });
+                return `✅ Created issue #${issue.number}: ${issue.title} — ${issue.html_url}${data.assign_copilot ? ' and assigned to @copilot!' : ''}`;
+              }
+            },
+            {
+              intent: 'create_pr',
+              description: 'Create a new pull request in the repository.',
+              dataFields: {
+                title: 'string - the PR title',
+                body: 'string - the PR body or description',
+                head_branch: 'string - the source branch name',
+                base_branch: 'string - the target branch name (default: main)',
+                assign_copilot: 'boolean - true if user wants copilot to review'
+              },
+              execute: async (data, context) => {
+                const pr = await context.github('POST', `/repos/${context.env.REPO}/pulls`, {
+                  title: data.title,
+                  body: data.body || '',
+                  head: data.head_branch,
+                  base: data.base_branch || 'main'
+                });
+                if (data.assign_copilot) {
+                  await context.github('POST', `/repos/${context.env.REPO}/pulls/${pr.number}/requested_reviewers`, {
+                    reviewers: ['copilot']
+                  });
+                }
+                return `✅ Created PR #${pr.number}: ${pr.title} — ${pr.html_url}${data.assign_copilot ? ' and requested review from @copilot!' : ''}`;
+              }
+            },
+            {
+              intent: 'assign_copilot_issue',
+              description: 'Assign an existing issue to @copilot to implement.',
+              dataFields: {
+                issue_number: 'number - the issue number to assign'
+              },
+              execute: async (data, context) => {
+                await context.github('PATCH', `/repos/${context.env.REPO}/issues/${data.issue_number}`, {
+                  assignees: ['copilot']
+                });
+                return `✅ Assigned @copilot to issue #${data.issue_number}`;
+              }
+            },
+            {
+              intent: 'assign_copilot_pr',
+              description: 'Request @copilot to review an existing pull request.',
+              dataFields: {
+                pr_number: 'number - the pull request number'
+              },
+              execute: async (data, context) => {
+                await context.github('POST', `/repos/${context.env.REPO}/pulls/${data.pr_number}/requested_reviewers`, {
+                  reviewers: ['copilot']
+                });
+                return `✅ Requested review from @copilot on PR #${data.pr_number}`;
+              }
+            },
+            {
+              intent: 'list_issues',
+              description: 'List open issues in the repository.',
+              dataFields: null,
+              execute: async (data, context) => {
+                const issues = await context.github('GET', `/repos/${context.env.REPO}/issues?state=open&per_page=5`);
+                if (issues.length === 0) return 'No open issues found.';
+                return issues.map(i => `• #${i.number} ${i.title}\n  ${i.html_url}`).join('\n');
+              }
+            },
+            {
+              intent: 'list_prs',
+              description: 'List open pull requests in the repository.',
+              dataFields: null,
+              execute: async (data, context) => {
+                const prs = await context.github('GET', `/repos/${context.env.REPO}/pulls?state=open&per_page=5`);
+                if (prs.length === 0) return 'No open pull requests found.';
+                return prs.map(p => `• #${p.number} ${p.title}\n  ${p.html_url}`).join('\n');
+              }
+            }
+          ];
+
+          // --- Helper: buildSystemPrompt ---
+          function buildSystemPrompt() {
+            const intentList = SKILLS.map(skill => {
+              const fields = skill.dataFields
+                ? '\n' + Object.entries(skill.dataFields)
+                    .map(([k, v]) => `      - ${k}: ${v}`)
+                    .join('\n')
+                : '';
+              return `- ${skill.intent}: ${skill.description}${fields}`;
+            }).join('\n');
+
+            return `You are a helpful assistant embedded in a Telegram bot connected to a GitHub repository.
+
+          When responding, you MUST always reply with a valid JSON object — raw JSON only, no markdown, no code blocks.
+
+          Response shape:
+          {
+            "intent": "<intent string>",
+            "reply": "<friendly human-readable message to send to the user>",
+            "data": { <fields relevant to the intent> }
+          }
+
+          Available intents:
+          ${intentList}
+
+          For any intent involving GitHub actions, always populate the relevant data fields.
+          For the "chat" intent, only the "reply" field matters.
+          If the user mentions "copilot", "assign to copilot", or "let copilot handle it", set assign_copilot: true in data.
+
+          Repository: ${REPO}`;
+          }
+
+          // --- Helper: callOpenAI ---
+          async function callOpenAI(messages) {
+            const systemPrompt = buildSystemPrompt();
+            const res = await fetch('https://api.openai.com/v1/chat/completions', {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${OPENAI_KEY}`,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({
+                model: 'gpt-4o-mini',
+                messages: [{ role: 'system', content: systemPrompt }, ...messages]
+              })
+            });
+            const data = await res.json();
+            if (!data.choices || !data.choices.length) {
+              throw new Error(`OpenAI API error: ${JSON.stringify(data)}`);
+            }
+            return data.choices[0].message.content;
+          }
+
+          // --- Helper: route ---
+          async function route(intent, data, context) {
+            const skill = SKILLS.find(s => s.intent === intent);
+            if (!skill) {
+              return data.reply || "I'm not sure how to help with that.";
+            }
+            try {
+              return await skill.execute(data, context);
+            } catch (err) {
+              console.error(`Error in skill "${intent}":`, err);
+              return `⚠️ Something went wrong: ${err.message}`;
+            }
+          }
+
+          // --- State helpers ---
           async function loadState() {
             try {
               const raw = await readFile(STATE_FILE, 'utf8');
@@ -65,158 +254,6 @@ jobs:
             return data.ok ? data.result : [];
           }
 
-          async function telegramSend(chatId, text) {
-            const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`;
-            await fetch(url, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'Markdown' })
-            });
-          }
-
-          async function callOpenAI(messages) {
-            const systemPrompt = `You are a helpful assistant embedded in a Telegram bot. You have access to a GitHub repository and can help manage it.
-
-          When responding, you MUST always reply with a valid JSON object (no markdown, no code blocks, raw JSON only) in this exact shape:
-
-          {
-            "intent": "<one of: chat | create_issue | create_pr | assign_copilot_issue | assign_copilot_pr | list_issues | list_prs>",
-            "reply": "<the message to send back to the user on Telegram>",
-            "data": {
-              "title": "...",
-              "body": "...",
-              "issue_number": 123,
-              "pr_number": 123,
-              "head_branch": "...",
-              "base_branch": "main"
-            }
-          }
-
-          Intent definitions:
-          - chat: normal conversation, no GitHub action needed
-          - create_issue: user wants to create a new GitHub issue (optionally assign to Copilot)
-          - create_pr: user wants to create a new pull request (optionally assign to Copilot)
-          - assign_copilot_issue: user wants to assign an existing issue to @copilot
-          - assign_copilot_pr: user wants to assign an existing PR to @copilot for review
-          - list_issues: user wants to see open issues
-          - list_prs: user wants to see open pull requests
-
-          For create_issue and create_pr, check if the user mentions "copilot", "assign to copilot", or "let copilot handle it" — if so, set data.assign_copilot = true.
-
-          The reply field must always contain a friendly human-readable response confirming what you did or answering the question.
-
-          The repository context is: ${REPO}`;
-
-            const res = await fetch('https://api.openai.com/v1/chat/completions', {
-              method: 'POST',
-              headers: {
-                'Authorization': `Bearer ${OPENAI_KEY}`,
-                'Content-Type': 'application/json'
-              },
-              body: JSON.stringify({
-                model: 'gpt-4o-mini',
-                messages: [{ role: 'system', content: systemPrompt }, ...messages]
-              })
-            });
-            const data = await res.json();
-            if (!data.choices || !data.choices.length) {
-              throw new Error(`OpenAI API error: ${JSON.stringify(data)}`);
-            }
-            return data.choices[0].message.content;
-          }
-
-          async function handleGitHubAction(intent, data) {
-            const base = 'https://api.github.com';
-            try {
-              if (intent === 'create_issue') {
-                const res = await fetch(`${base}/repos/${REPO}/issues`, {
-                  method: 'POST',
-                  headers: ghHeaders,
-                  body: JSON.stringify({
-                    title: data.title,
-                    body: data.body || '',
-                    assignees: data.assign_copilot ? ['copilot'] : []
-                  })
-                });
-                const issue = await res.json();
-                if (!res.ok) return `GitHub API error: ${res.status} ${JSON.stringify(issue)}`;
-                return `✅ Created issue #${issue.number}: ${issue.title} — ${issue.html_url}${data.assign_copilot ? ' and assigned to @copilot!' : ''}`;
-              }
-
-              if (intent === 'create_pr') {
-                const res = await fetch(`${base}/repos/${REPO}/pulls`, {
-                  method: 'POST',
-                  headers: ghHeaders,
-                  body: JSON.stringify({
-                    title: data.title,
-                    body: data.body || '',
-                    head: data.head_branch,
-                    base: data.base_branch || 'main'
-                  })
-                });
-                const pr = await res.json();
-                if (!res.ok) return `GitHub API error: ${res.status} ${JSON.stringify(pr)}`;
-                if (data.assign_copilot) {
-                  await fetch(`${base}/repos/${REPO}/pulls/${pr.number}/requested_reviewers`, {
-                    method: 'POST',
-                    headers: ghHeaders,
-                    body: JSON.stringify({ reviewers: ['copilot'] })
-                  });
-                }
-                return `✅ Created PR #${pr.number}: ${pr.title} — ${pr.html_url}${data.assign_copilot ? ' and requested review from @copilot!' : ''}`;
-              }
-
-              if (intent === 'assign_copilot_issue') {
-                const res = await fetch(`${base}/repos/${REPO}/issues/${data.issue_number}`, {
-                  method: 'PATCH',
-                  headers: ghHeaders,
-                  body: JSON.stringify({ assignees: ['copilot'] })
-                });
-                if (!res.ok) {
-                  const err = await res.json();
-                  return `GitHub API error: ${res.status} ${JSON.stringify(err)}`;
-                }
-                return `✅ Assigned @copilot to issue #${data.issue_number}`;
-              }
-
-              if (intent === 'assign_copilot_pr') {
-                const res = await fetch(`${base}/repos/${REPO}/pulls/${data.pr_number}/requested_reviewers`, {
-                  method: 'POST',
-                  headers: ghHeaders,
-                  body: JSON.stringify({ reviewers: ['copilot'] })
-                });
-                if (!res.ok) {
-                  const err = await res.json();
-                  return `GitHub API error: ${res.status} ${JSON.stringify(err)}`;
-                }
-                return `✅ Requested review from @copilot on PR #${data.pr_number}`;
-              }
-
-              if (intent === 'list_issues') {
-                const res = await fetch(`${base}/repos/${REPO}/issues?state=open&per_page=5`, {
-                  headers: ghHeaders
-                });
-                const issues = await res.json();
-                if (!res.ok) return `GitHub API error: ${res.status} ${JSON.stringify(issues)}`;
-                if (issues.length === 0) return 'No open issues found.';
-                return issues.map(i => `• #${i.number} ${i.title}\n  ${i.html_url}`).join('\n');
-              }
-
-              if (intent === 'list_prs') {
-                const res = await fetch(`${base}/repos/${REPO}/pulls?state=open&per_page=5`, {
-                  headers: ghHeaders
-                });
-                const prs = await res.json();
-                if (!res.ok) return `GitHub API error: ${res.status} ${JSON.stringify(prs)}`;
-                if (prs.length === 0) return 'No open pull requests found.';
-                return prs.map(p => `• #${p.number} ${p.title}\n  ${p.html_url}`).join('\n');
-              }
-            } catch (err) {
-              return `Error calling GitHub API: ${err.message}`;
-            }
-            return null;
-          }
-
           // --- Main ---
           let currentChatId = null;
           try {
@@ -228,6 +265,13 @@ jobs:
               process.exit(0);
             }
 
+            const context = {
+              chatId: null,
+              github: githubCall,
+              telegram: telegramSend,
+              env: { REPO, GITHUB_TOKEN, TELEGRAM_TOKEN, OPENAI_KEY }
+            };
+
             for (const update of updates) {
               try {
                 if (!update.message || !update.message.text) {
@@ -237,6 +281,7 @@ jobs:
 
                 const chatId = update.message.chat.id;
                 currentChatId = chatId;
+                context.chatId = chatId;
                 const userText = update.message.text;
                 state.offset = update.update_id + 1;
 
@@ -261,10 +306,9 @@ jobs:
                   // Treat as plain chat reply
                 }
 
-                if (intent !== 'chat') {
-                  const actionResult = await handleGitHubAction(intent, data);
-                  if (actionResult) reply = actionResult;
-                }
+                data.reply = reply;
+                const result = await route(intent, data, context);
+                if (result) reply = result;
 
                 await telegramSend(chatId, reply);
 
