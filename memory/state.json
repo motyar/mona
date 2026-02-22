@@ -1,5 +1,5 @@
 {
-  "offset": 517942976,
+  "offset": 517942977,
   "conversations": {
     "3181434": [
       {
@@ -41,6 +41,14 @@
       {
         "role": "assistant",
         "content": "⚠️ Something went wrong: GitHub API error: 422 {\"message\":\"Validation Failed\",\"errors\":[{\"value\":[\"copilot\"],\"resource\":\"Issue\",\"field\":\"assignees\",\"code\":\"invalid\"}],\"documentation_url\":\"https://docs.github.com/rest/issues/issues#create-an-issue\",\"status\":\"422\"}"
+      },
+      {
+        "role": "user",
+        "content": "Create a new dummy sample issue"
+      },
+      {
+        "role": "assistant",
+        "content": "✅ Created issue #5: Sample Issue — https://github.com/motyar/mona/issues/5"
       }
     ]
   }
