@@ -1,5 +1,5 @@
 {
-  "offset": 517942978,
+  "offset": 517942979,
   "conversations": {
     "3181434": [
       {
@@ -57,6 +57,14 @@
       {
         "role": "assistant",
         "content": "⚠️ Something went wrong: GitHub API error: 422 {\"message\":\"Validation Failed\",\"errors\":[{\"value\":\"copilot\",\"resource\":\"Issue\",\"field\":\"assignees\",\"code\":\"invalid\"}],\"documentation_url\":\"https://docs.github.com/rest/issues/issues#update-an-issue\",\"status\":\"422\"}"
+      },
+      {
+        "role": "user",
+        "content": "?"
+      },
+      {
+        "role": "assistant",
+        "content": "It seems that I'm unable to assign issues to Copilot directly due to GitHub's limitations. If you need assistance with another action or have a different request, please let me know!"
       }
     ]
   }
