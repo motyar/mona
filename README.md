@@ -43,6 +43,8 @@ You can message the bot in natural language. Here are some examples:
 | *"Request copilot review on PR #3"* | Requests @copilot as a reviewer on a PR |
 | *"Create a PR from feature-branch to main"* | Creates a pull request |
 
+👉 **See [EXAMPLES.md](EXAMPLES.md) for a complete list of examples** — from basic chat to advanced Copilot-powered workflows and custom skill recipes.
+
 ## Cost
 
 - **Public repos**: GitHub Actions minutes are **free**, so the bot costs nothing to run (aside from OpenAI API usage which is minimal with GPT-4o-mini).
