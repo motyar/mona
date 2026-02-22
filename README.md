@@ -5,7 +5,7 @@ A zero-dependency Telegram bot that runs entirely on GitHub Actions. It polls Te
 ## Setup
 
 1. **Create a Telegram bot** — message [@BotFather](https://t.me/BotFather) on Telegram, use `/newbot`, and save the token.
-2. **Get an OpenAI API key** — sign up at [platform.openai.com](https://platform.openai.com) and create an API key with access to GPT-4o-mini.
+2. **Get an OpenAI API key** — sign up at [platform.openai.com](https://platform.openai.com) and create an API key (ensure your account has access to GPT-4o-mini).
 3. **Add repository secrets** — go to your repo's **Settings → Secrets and variables → Actions** and add:
    | Secret | Value |
    |---|---|

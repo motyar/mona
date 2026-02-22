@@ -36,6 +36,7 @@ jobs:
           const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
           const REPO = process.env.REPO;
           const STATE_FILE = 'memory/state.json';
+          const MAX_HISTORY = 20;
 
           const ghHeaders = {
             'Authorization': `Bearer ${GITHUB_TOKEN}`,
@@ -118,6 +119,9 @@ jobs:
               })
             });
             const data = await res.json();
+            if (!data.choices || !data.choices.length) {
+              throw new Error(`OpenAI API error: ${JSON.stringify(data)}`);
+            }
             return data.choices[0].message.content;
           }
 
@@ -265,7 +269,7 @@ jobs:
                 await telegramSend(chatId, reply);
 
                 state.conversations[chatId].push({ role: 'assistant', content: reply });
-                state.conversations[chatId] = state.conversations[chatId].slice(-20);
+                state.conversations[chatId] = state.conversations[chatId].slice(-MAX_HISTORY);
               } catch (err) {
                 console.error(`Error processing update ${update.update_id}:`, err);
                 if (currentChatId) {
